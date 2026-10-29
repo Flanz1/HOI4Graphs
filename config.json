@@ -1,0 +1,39 @@
+{
+  "_help": "Edit this per game. 'nations' = countries to track (order matters only for the cost library). 'factions' must use the keys Axis and Allies. 'minor_countries' feed the 'Minor ...' graphs. 'sub_factions' feed the 'Sub-Faction Analysis' graphs (marker: o s ^ D v p *). Colours are any matplotlib colour.",
+
+  "nations": ["GER", "ITA", "HUN", "ROM", "SPR", "BUL", "FIN", "JAP", "MAN", "SIA",
+              "ENG", "USA", "FRA", "CAN", "RAJ", "SAF", "AST", "SOV", "UKR", "MON"],
+
+  "factions": {
+    "Axis":   ["GER", "ITA", "JAP", "HUN", "ROM", "SPR", "BUL", "FIN", "MAN", "SIA"],
+    "Allies": ["ENG", "USA", "FRA", "CAN", "RAJ", "SAF", "AST", "SOV", "UKR", "MON"]
+  },
+
+  "sub_factions": [
+    {"name": "Western Allies", "color": "#0000FF", "marker": "o",
+     "members": ["USA", "ENG", "FRA", "CAN", "AST", "SAF", "RAJ"]},
+    {"name": "European Axis", "color": "#8B0000", "marker": "s",
+     "members": ["GER", "ITA", "HUN", "ROM", "BUL", "FIN", "SPR"]},
+    {"name": "Soviets & Puppets", "color": "#FF0000", "marker": "^",
+     "members": ["SOV", "UKR", "MON"]},
+    {"name": "Greater East Asian Co-Prosperity Sphere", "color": "#FF8C00", "marker": "D",
+     "members": ["JAP", "MAN", "SIA"]}
+  ],
+
+  "minor_countries": ["HUN", "ROM", "SPR", "BUL", "FIN", "MAN", "SIA",
+                      "CAN", "RAJ", "SAF", "AST", "UKR", "MON"],
+
+  "colors": {
+    "GER": "#000000", "ITA": "#008000", "JAP": "#800000", "HUN": "#804000", "ROM": "#008080",
+    "SPR": "#800080", "BUL": "#808000", "FIN": "#C0C0C0", "MAN": "#408080", "SIA": "#000080",
+    "ENG": "#FF0080", "USA": "#0000FF", "FRA": "#00FF00", "CAN": "#FF8000", "RAJ": "#FFFF00",
+    "SAF": "#80FF00", "AST": "#00FFFF", "SOV": "#FF0000", "UKR": "#FF00FF", "MON": "#8000FF"
+  },
+
+  "monthly_multiplier": 30,
+  "default_division_equipment_cost": 1.1,
+  "default_air_equipment_cost": 23,
+
+  "_manpower_help": "'original' = same numbers as the original scripts (if a country has divisions training, their manpower is subtracted from the fielded total; otherwise trained-but-undeployed divisions are added). 'fielded' = only divisions actually on the map.",
+  "manpower_mode": "original"
+}

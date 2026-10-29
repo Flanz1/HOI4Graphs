@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.hoi4
+graphs/
+*_saves/
