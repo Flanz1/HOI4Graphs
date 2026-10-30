@@ -13,8 +13,8 @@ produces the full set of graphs:
   Deployed air IC     : per nation, Axis vs Allies   (equipment in air wings x IC cost)
 
 The plotting code is ported from the original "bbb/zzz/mmm graph maker" scripts so the
-images look the same; the data now comes straight from binary saves instead of the
-plain-text regex passes.
+images look the same, and the numbers reproduce the original regex scripts exactly - but
+it reads both binary and plain-text saves, in one pass, in parallel.
 
 Usage:
     python hoi4_graphs.py "C:\\path\\to\\save folder"            # graphs go to <folder>\\graphs
@@ -40,7 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hoi4_save_parser as parser  # noqa: E402
 
-CACHE_VERSION = 5
+CACHE_VERSION = 8
 
 
 # =====================================================================================
@@ -122,12 +122,12 @@ def build_series(records, cfg):
     nations = cfg['nations']
     mult = cfg['monthly_multiplier']
 
-    # one record per in-game date, chronological (duplicates of the same date: keep one)
-    by_date = {}
-    for r in records:
-        if r['date']:
-            by_date[r['date']] = r
-    records = [by_date[d] for d in sorted(by_date)]
+    # one record per in-game day, chronological (several saves of the same day: keep the
+    # latest one, so a manual save next to an autosave doesn't count that day twice)
+    by_day = {}
+    for r in sorted((r for r in records if r['date']), key=lambda r: r['date']):
+        by_day[r['date'][:10]] = r
+    records = [by_day[d] for d in sorted(by_day)]
     dates = [datetime.fromisoformat(r['date']) for r in records]
 
     # --- equipment cost library: first cost seen wins (chronological, nation order) ----
@@ -172,11 +172,8 @@ def build_series(records, cfg):
             series['civ'][n].append(c.get('civ', 0.0) * mult)
             mp = c.get('field_manpower', 0)
             if cfg['manpower_mode'] == 'original':
-                # Reproduces the original regex script: if the country has divisions in
-                # training, their manpower is subtracted; otherwise trained-but-undeployed
-                # divisions in the queue are counted as fielded.
-                tr = c.get('queue_training_manpower', 0)
-                mp = mp - tr if tr > 0 else mp + c.get('queue_ready_manpower', 0)
+                # same arithmetic as the original "manpower in field looker" script
+                mp = mp + c.get('queue_manpower', 0) - r.get('training_manpower', {}).get(n, 0)
             series['manpower'][n].append(max(0, mp))
             series['division_cost'][n].append(div_cost[n])
             series['air_cost'][n].append(air_cost[n])
