@@ -1,7 +1,8 @@
 # HOI4 IC Graph Tool
 
 Turns a folder of Hearts of Iron IV saves (e.g. the monthly autosaves of a multiplayer game)
-into the full set of IC / manpower / division / air graphs, plus a CSV of the numbers.
+into the full set of IC / manpower / division / air graphs, punch-card ledger tables, and a
+CSV of the numbers.
 
 It reads both HOI4 save formats, **binary** (the default for MP and autosaves) and
 **plain text**, zipped or not, and you can mix them in one folder.
@@ -34,6 +35,9 @@ would count as an extra month in the cumulative totals.
 - `sub_factions`: groups for the "Sub-Faction Analysis" graphs (name, colour, marker, members)
 - `minor_countries`: countries shown in the "Minor ..." graphs
 - `colors`: line colour per country
+- `punchcard_checkpoints`: columns of the punch-card tables, `"auto"` or a list like
+  `["1939.07", "1941.06", "latest"]` (months without a save are skipped)
+- `names`: full country names for the punch cards (common tags are built in)
 
 Use `-c other_game.json` to keep one config per game.
 
@@ -45,6 +49,7 @@ Use `-c other_game.json` to keep one config per game.
 | Army manpower | `army_manpower_value` of every division (including divisions in transit, e.g. volunteers), adjusted for the deployment queue exactly like the original script (`manpower_mode`) |
 | Division cost | equipment amount in each division x unit IC cost (division credited to its expeditionary owner if lent) |
 | Deployed air IC | equipment in each air wing x unit IC cost |
+| Punch cards | ledger tables (cumulative MIL IC, army IC, air IC, army + air IC) per nation at checkpoint dates, grouped by bloc, with combined rows, bloc totals and growth |
 
 Unit costs come from the `cost` of military production lines, first value seen across the game.
 Equipment that was never on a production line uses the defaults in the config (1.1 for division

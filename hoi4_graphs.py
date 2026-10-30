@@ -11,6 +11,8 @@ produces the full set of graphs:
   Army manpower       : per nation, Axis vs Allies
   Division cost       : per nation, Axis vs Allies   (equipment in fielded divisions x IC cost)
   Deployed air IC     : per nation, Axis vs Allies   (equipment in air wings x IC cost)
+  Punch cards         : ledger tables of cumulative IC, army IC, air IC and army+air IC
+                        per nation at checkpoint dates, grouped by bloc
 
 The plotting code is ported from the original "bbb/zzz/mmm graph maker" scripts so the
 images look the same, and the numbers reproduce the original regex scripts exactly - but
@@ -39,6 +41,7 @@ import matplotlib.dates as mdates
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hoi4_save_parser as parser  # noqa: E402
+import punchcard  # noqa: E402
 
 CACHE_VERSION = 8
 
@@ -58,6 +61,8 @@ def load_config(path):
     cfg.setdefault('default_air_equipment_cost', 23)
     cfg.setdefault('manpower_mode', 'original')
     cfg.setdefault('monthly_multiplier', 30)
+    cfg.setdefault('punchcard_checkpoints', 'auto')
+    cfg.setdefault('names', {})
     return cfg
 
 
@@ -136,7 +141,7 @@ def build_series(records, cfg):
     for r in records:
         for tag, eq, cost in sorted(r['line_costs'], key=lambda x: order.get(x[0], 1e9)):
             if tag in order and eq not in cost_lib:
-                cost_lib[eq] = cost
+                cost_lib[eq] = round(cost, 3)  # the original stored costs with 3 decimals
 
     div_default = cfg['default_division_equipment_cost']
     air_default = cfg['default_air_equipment_cost']
@@ -150,7 +155,7 @@ def build_series(records, cfg):
                 c = default
                 missing[kind].add(eq)
             total += c * amount
-        return total
+        return round(total, 3)  # the original summed per-unit totals printed with 3 decimals
 
     series = {k: {n: [] for n in nations} for k in
               ('mil', 'nav', 'civ', 'manpower', 'division_cost', 'air_cost')}
@@ -510,6 +515,73 @@ def make_all_graphs(dates, series, cfg, out):
                           'Total Air Wing Equipment Cost', p('hoi4_air_wings_factions_timeline.png'))
 
 
+# =====================================================================================
+# Punch-card ledger tables
+# =====================================================================================
+def resolve_checkpoints(dates, spec, n_auto=11):
+    """Indices into `dates`. spec: 'auto' or a list of 'YYYY.MM' / 'latest'."""
+    if not dates:
+        return []
+    if spec == 'auto' or not spec:
+        n = min(n_auto, len(dates))
+        if n == 1:
+            return [len(dates) - 1]
+        return sorted({round(i * (len(dates) - 1) / (n - 1)) for i in range(n)})
+    out = []
+    for item in spec:
+        if str(item).lower() == 'latest':
+            idx = len(dates) - 1
+        else:
+            y, m = (int(x) for x in str(item).split('.')[:2])
+            idx = next((i for i, d in enumerate(dates) if (d.year, d.month) == (y, m)), None)
+            if idx is None:
+                continue  # month not covered by these saves
+        if idx not in out:
+            out.append(idx)
+    return sorted(out)
+
+
+def make_punchcards(dates, series, cfg, out):
+    idx = resolve_checkpoints(dates, cfg['punchcard_checkpoints'])
+    if not idx:
+        return
+    labels = [dates[i].strftime('%b %Y') for i in idx]
+    nation_faction = {n: f for f, members in cfg['factions'].items() for n in members}
+    tracked = set(cfg['nations'])
+
+    blocs = []
+    for sf in cfg['sub_factions'] or [{'name': f, 'members': m} for f, m in cfg['factions'].items()]:
+        members = [t for t in sf['members'] if t in tracked]
+        facs = [nation_faction.get(t) for t in members]
+        faction = max(set(facs), key=facs.count) if facs else None
+        blocs.append({'name': sf.get('punchcard_name', sf['name']), 'faction': faction,
+                      'members': members})
+
+    def at_checkpoints(per_nation):
+        return {t: [per_nation[t][i] for i in idx] for t in per_nation if t in tracked}
+
+    cum_mil = {}
+    for t, vals in series['mil'].items():
+        run, c = 0.0, []
+        for v in vals:
+            run += v
+            c.append(run)
+        cum_mil[t] = c
+    army = series['division_cost']
+    air = series['air_cost']
+    both = {t: [a + b for a, b in zip(army[t], air[t])] for t in army}
+    cards = [
+        ('punchcard_1_cumulative_ic.png', 'Cumulative Industrial Capacity', cum_mil),
+        ('punchcard_2_army_ic.png', 'Army IC in the Field', army),
+        ('punchcard_3_air_ic.png', 'Air IC in the Field', air),
+        ('punchcard_4_army_air_ic.png', 'Army + Air IC in the Field', both),
+    ]
+    for fname, title, data in cards:
+        punchcard.render(os.path.join(out, fname), title, labels, at_checkpoints(data), blocs,
+                         names=cfg['names'])
+        print(f"  wrote {fname}")
+
+
 def write_csv(dates, series, cfg, path):
     cols = ('mil', 'civ', 'nav', 'manpower', 'division_cost', 'air_cost')
     with open(path, 'w', newline='', encoding='utf-8') as f:
@@ -594,6 +666,7 @@ def main(argv=None):
 
     print('Drawing graphs...')
     make_all_graphs(dates, series, cfg, out)
+    make_punchcards(dates, series, cfg, out)
     write_csv(dates, series, cfg, os.path.join(out, 'hoi4_stats.csv'))
     if errors:
         print(f'{len(errors)} save(s) could not be read:')
