@@ -30,6 +30,7 @@ I32, F32, BOOL, QSTR, U32, USTR, F64, RGB, U64, I64 = (
 
 # ---- field tokens (name in plain-text saves -> token) -----------------------------
 T_DATE = 0x284a              # date
+T_PLAYERS = 0x3567           # player_countries (header)
 T_COUNTRIES = 0x2d49         # countries
 T_ID = 0x000b                # id / id={ id= type= }
 T_TYPE = 0x00e1              # type
@@ -64,7 +65,7 @@ T_AIR_WING = 0x2fb5          # air_wings
 
 # plain-text name -> binary token
 NAMES = {
-    'date': T_DATE, 'countries': T_COUNTRIES, 'id': T_ID, 'type': T_TYPE,
+    'date': T_DATE, 'player_countries': T_PLAYERS, 'countries': T_COUNTRIES, 'id': T_ID, 'type': T_TYPE,
     'production': T_PRODUCTION, 'military_lines': T_MIL_LINE, 'naval_lines': T_NAV_LINE,
     'ship_refit_lines': T_NAV_LINE2, 'general_lines': T_GEN_LINES, 'building': T_GEN_LINE,
     'speed': T_SPEED, 'cost': T_COST, 'equipment_variant_index': T_LINE_EQUIP,
@@ -81,6 +82,7 @@ ALL = True  # spec marker: keep whole subtree
 
 # Only these parts of the (40-90 MB) save are materialised; everything else is skipped.
 SPEC = {
+    T_PLAYERS: ALL,
     T_COUNTRIES: {
         'str': {
             T_PRODUCTION: {T_MIL_LINE: ALL, T_NAV_LINE: ALL, T_NAV_LINE2: ALL, T_GEN_LINES: ALL},
@@ -92,6 +94,29 @@ SPEC = {
     },
     T_AIR: {'str': {T_AIR_POOL: {T_AIR_WING: {T_ID: ALL, T_EQUIPMENT: ALL}}}},
 }
+
+
+def build_spec(tracked=None):
+    """SPEC restricted to the tracked nations (None = every country).
+
+    Untracked countries are only read for what can still affect tracked ones: divisions
+    lent to a tracked country (expeditionary forces) and their deployment queue (the
+    original script subtracted queued manpower by manpower tag, file-wide)."""
+    if not tracked:
+        return SPEC
+    tracked = frozenset(tracked)
+    full = SPEC[T_COUNTRIES]['str']
+
+    def lent_to_tracked(div):
+        owner = div.get(T_EXPED_OWNER) or div.get(T_DIV_OWNER)
+        return ALL if owner is None or owner in tracked else None
+
+    other = {T_UNITS: {T_DIVISION: {T_EQUIPMENT: lent_to_tracked}},
+             T_DEPLOYMENT: {T_DEP_LINE: ALL}}
+    countries = {t: full for t in tracked}
+    countries['str'] = other
+    air = {t: SPEC[T_AIR]['str'] for t in tracked}
+    return {T_PLAYERS: ALL, T_COUNTRIES: countries, T_AIR: air}
 
 
 class Node(list):
@@ -226,7 +251,7 @@ def parse_binary(data, spec=SPEC):
             return unpack_q(data, p)[0], p + 8
         return ('tok', t), p  # bare token
 
-    def sub_spec(spec, key):
+    def sub_spec(spec, key, node):
         if spec is ALL:
             return ALL
         s = spec.get(key)
@@ -234,6 +259,8 @@ def parse_binary(data, spec=SPEC):
             s = spec.get('str')
         if s is None:
             s = spec.get('*')
+        if callable(s):  # decide from what has been parsed of this node so far
+            s = s(node)
         return s
 
     def obj(p, spec):
@@ -262,7 +289,7 @@ def parse_binary(data, spec=SPEC):
                 have = False
                 nt = data[p] | (data[p + 1] << 8)
                 if nt == OPEN:
-                    s = sub_spec(spec, key)
+                    s = sub_spec(spec, key, node)
                     if s is None:
                         p = _skip_value(data, p)
                     else:
@@ -287,7 +314,41 @@ def parse_binary(data, spec=SPEC):
             have = True
         return node, p
 
-    root, _ = obj(7, spec)
+    def block_end_ok(p):
+        # a top-level block is followed by the next top-level `key =` (or EOF)
+        return p >= n - 2 or data[p + 2:p + 4] == b'\x01\x00'
+
+    def seek():
+        root = Node()
+        for key, s in spec.items():
+            if not isinstance(key, int):
+                return None
+            pat = struct.pack('<HHH', key, EQ, OPEN)
+            i = data.find(pat, 7)
+            found = None
+            while i >= 0:
+                q = i + 6
+                # countries={ must start with a country tag: "TAG" = {
+                plausible = key != T_COUNTRIES or (
+                    data[q:q + 4] == b'\x0f\x00\x03\x00' and data[q + 4:q + 7].isupper()
+                    and data[q + 7:q + 11] == b'\x01\x00\x03\x00')
+                if plausible:
+                    try:
+                        child, end = obj(q, s)
+                        if block_end_ok(end):
+                            found = child
+                            break
+                    except (IndexError, struct.error):
+                        pass
+                i = data.find(pat, i + 1)
+            if found is None:
+                return None
+            root.append((key, found))
+        return root
+
+    root = seek()
+    if root is None:  # unexpected layout: walk the whole file
+        root, _ = obj(7, spec)
     return root
 
 
@@ -306,9 +367,31 @@ def _txt_scalar(raw):
     return raw.decode('utf-8', 'replace')
 
 
+_SIBLING = {}
+
+
 def _txt_skip_block(data, p):
-    """p is just after an opening '{'. Return position just after its matching '}'.
-    (Indentation can't be trusted: the game sometimes closes blocks on the same line.)"""
+    """p is just after an opening '{'. Return position just after its matching '}'."""
+    # Fast path: a block opened at the end of a line at indentation k normally closes with a
+    # line holding just k tabs + '}'. That's only trusted if no line in between sits at
+    # indentation k (which would mean the block really closed earlier on some content line)
+    # and the braces balance; otherwise fall back to the exact scan.
+    if data[p:p + 1] in (b'\n', b'\r'):
+        nl = data.rfind(b'\n', 0, p)
+        k = 0
+        while data[nl + 1 + k:nl + 2 + k] == b'\t':
+            k += 1
+        tabs = b'\t' * k
+        end = data.find(b'\n' + tabs + b'}', p)
+        if end >= 0:
+            sib = _SIBLING.get(k)
+            if sib is None:
+                sib = _SIBLING[k] = re.compile(b'\n' + tabs + rb'[^\t\r\n]')
+            m = sib.search(data, p, end + 1)
+            if m is None or m.start() == end:
+                seg = data[p:end]
+                if seg.count(b'{') == seg.count(b'}'):
+                    return end + k + 2
     depth = 1
     for m in _TXT_BRACE.finditer(data, p):
         if m.group() == b'{':
@@ -341,7 +424,7 @@ def parse_text(data, spec=SPEC):
         # can never collide with a token number
         return names.get(v, v) if isinstance(v, str) else str(v)
 
-    def sub_spec(spec, key):
+    def sub_spec(spec, key, node):
         if spec is ALL:
             return ALL
         s = spec.get(key)
@@ -349,6 +432,8 @@ def parse_text(data, spec=SPEC):
             s = spec.get('str')
         if s is None:
             s = spec.get('*')
+        if callable(s):  # decide from what has been parsed of this node so far
+            s = s(node)
         return s
 
     def obj(p, spec):
@@ -376,7 +461,7 @@ def parse_text(data, spec=SPEC):
                 have = False
                 kind2, val2, p2 = tok(p)
                 if kind2 == '{':
-                    s = sub_spec(spec, key)
+                    s = sub_spec(spec, key, node)
                     if s is None:
                         p = _txt_skip_block(data, p2)
                     else:
@@ -400,8 +485,20 @@ def parse_text(data, spec=SPEC):
                 node.append((None, pend))
             pend, have = val, True
 
-    start = data.find(b'\n') + 1  # skip the HOI4txt magic line
-    root, _ = obj(start, spec)
+    # top-level keys always start at column 0, so jump straight to the blocks we need
+    inv = {v: k for k, v in names.items()}
+    root = Node()
+    for key, s in spec.items():
+        name = inv.get(key)
+        i = data.find(b'\n' + name.encode() + b'={') if name else -1
+        if i < 0:
+            root = None
+            break
+        child, _ = obj(i + len(name) + 3, s)
+        root.append((key, child))
+    if root is None:  # unexpected layout: walk the whole file
+        start = data.find(b'\n') + 1  # skip the HOI4txt magic line
+        root, _ = obj(start, spec)
     return root
 
 
@@ -431,11 +528,13 @@ def _first_value(mp_node):
     return None, 0
 
 
-def extract(path):
-    """Parse one save and return a plain dict with everything the graphs need."""
+def extract(path, tracked=None):
+    """Parse one save and return a plain dict with everything the graphs need.
+    `tracked`: nation tags to report on (None = all countries)."""
+    tracked = set(tracked) if tracked else None
     data = read_save_bytes(path)
     date = header_date(data)
-    root = parse(data)
+    root = parse(data, build_spec(tracked))
     del data
 
     countries = {}
@@ -446,6 +545,7 @@ def extract(path):
     for tag, c in cnodes:
         if not isinstance(tag, str) or not isinstance(c, Node):
             continue
+        is_tracked = tracked is None or tag in tracked
         rec = {'mil': 0.0, 'nav': 0.0, 'civ': 0.0, 'field_manpower': 0}
         prod = c.get(T_PRODUCTION)
         if isinstance(prod, Node):
@@ -469,13 +569,8 @@ def extract(path):
                 if mtag == tag:
                     rec['field_manpower'] += mval
                 owner = d.get(T_EXPED_OWNER) or d.get(T_DIV_OWNER) or tag
-                divisions.append((owner, _eq_list(d.get(T_EQUIPMENT))))
-        # Deployment queue, replicating the original regex script exactly:
-        #  * every queued division's army_manpower_value (own tag) counts towards the nation;
-        #  * a `deployment={` block that contains a fractional training/max_training value
-        #    (finished divisions are written `training=1`) has ALL its queued
-        #    divisions subtracted, keyed by their manpower tag;
-        #  * each unfinished `military_deployment={` block is subtracted again.
+                if tracked is None or owner in tracked:
+                    divisions.append((owner, _eq_list(d.get(T_EQUIPMENT))))
         # divisions in transit (volunteers_transfer, exile_divisions_transfer, ...) count as
         # fielded manpower - the original counted every army_manpower_value in the country
         for k, blk in c:
@@ -486,6 +581,12 @@ def extract(path):
                 mtag, mval = _first_value(mp.get(T_ARMY_MP) if isinstance(mp, Node) else None)
                 if mtag == tag:
                     rec['field_manpower'] += mval
+        # Deployment queue, replicating the original regex script exactly:
+        #  * every queued division's army_manpower_value (own tag) counts towards the nation;
+        #  * a `deployment={` block that contains a fractional training/max_training value
+        #    (finished divisions are written `training=1`) has ALL its queued
+        #    divisions subtracted, keyed by their manpower tag;
+        #  * each unfinished `military_deployment={` block is subtracted again.
         rec['queue_manpower'] = 0
         dep = c.get(T_DEPLOYMENT)
         if isinstance(dep, Node):
@@ -506,7 +607,8 @@ def extract(path):
                     sub = (mval if any_unfinished else 0) + (mval if unfinished else 0)
                     if sub:
                         training_mp[mtag] = training_mp.get(mtag, 0) + sub
-        countries[tag] = rec
+        if is_tracked:
+            countries[tag] = rec
 
     air = []  # (tag, [(eq_id, amount)])
     anodes = root.get(T_AIR) or Node()
@@ -517,8 +619,12 @@ def extract(path):
             for wing in pool.all(T_AIR_WING):
                 air.append((tag, _eq_list(wing.get(T_EQUIPMENT))))
 
+    players = sorted({t for t, _ in (root.get(T_PLAYERS) or Node())
+                      if isinstance(t, str) and len(t) == 3 and t != '---'})
+
     return {
         'date': date.isoformat() if date else None,
+        'players': players,
         'countries': countries,
         'training_manpower': training_mp,
         'line_costs': line_costs,

@@ -1,0 +1,43 @@
+name: Build Windows exe
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: python -m pip install --upgrade pip pyinstaller matplotlib
+      - name: Build
+        run: >
+          python -m PyInstaller --noconfirm --onefile --console --name HOI4Graphs
+          --hidden-import hoi4_save_parser --hidden-import punchcard hoi4_graphs.py
+      - name: Smoke test
+        env:
+          HOI4GRAPHS_NO_PAUSE: '1'
+        run: dist\HOI4Graphs.exe --help
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force HOI4Graphs | Out-Null
+          Copy-Item dist\HOI4Graphs.exe, config.json, README.md, LICENSE HOI4Graphs\
+          Compress-Archive -Path HOI4Graphs\* -DestinationPath HOI4Graphs-windows.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HOI4Graphs-windows
+          path: HOI4Graphs-windows.zip
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: HOI4Graphs-windows.zip

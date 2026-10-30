@@ -30,6 +30,7 @@ import os
 import sys
 import time
 import zipfile
+import zlib
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 
@@ -38,12 +39,14 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+FROZEN = getattr(sys, 'frozen', False)  # running as the PyInstaller .exe
+# config.json lives next to the script, or next to the .exe when frozen
+HERE = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hoi4_save_parser as parser  # noqa: E402
 import punchcard  # noqa: E402
 
-CACHE_VERSION = 8
+CACHE_VERSION = 10
 
 
 # =====================================================================================
@@ -77,17 +80,18 @@ def find_saves(folder):
     return out
 
 
-def _cache_path(cache_dir, path):
+def _cache_path(cache_dir, path, nations):
     st = os.stat(path)
-    key = f"{os.path.basename(path)}.{st.st_size}.{int(st.st_mtime)}.v{CACHE_VERSION}.json"
+    tag = zlib.crc32(','.join(sorted(nations)).encode()) & 0xffff
+    key = f"{os.path.basename(path)}.{st.st_size}.{int(st.st_mtime)}.v{CACHE_VERSION}.{tag:04x}.json"
     return os.path.join(cache_dir, key)
 
 
-def _extract_job(path, cache_file):
+def _extract_job(path, cache_file, nations):
     if cache_file and os.path.exists(cache_file):
         with open(cache_file, 'r', encoding='utf-8') as f:
             return path, json.load(f), True
-    rec = parser.extract(path)
+    rec = parser.extract(path, nations)
     if cache_file:
         tmp = cache_file + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
@@ -96,13 +100,14 @@ def _extract_job(path, cache_file):
     return path, rec, False
 
 
-def scan_saves(paths, cache_dir, jobs):
+def scan_saves(paths, cache_dir, jobs, nations):
     if cache_dir:
         os.makedirs(cache_dir, exist_ok=True)
     results, errors = [], []
     t0 = time.time()
     with ProcessPoolExecutor(max_workers=jobs) as ex:
-        futs = {ex.submit(_extract_job, p, _cache_path(cache_dir, p) if cache_dir else None): p
+        futs = {ex.submit(_extract_job, p, _cache_path(cache_dir, p, nations) if cache_dir else None,
+                          nations): p
                 for p in paths}
         done = 0
         for fut in as_completed(futs):
@@ -477,7 +482,13 @@ IC_TEXT = {
 }
 
 
-def make_all_graphs(dates, series, cfg, out):
+GROUPS = ('mil', 'nav', 'civ', 'manpower', 'division', 'air', 'punch')
+
+
+def graph_jobs(dates, series, cfg, out):
+    """Every image as a (group, function, args, kwargs) job, so they can be drawn in parallel."""
+    jobs = []
+    add = lambda group, fn, *a, **kw: jobs.append((group, fn, a, kw))  # noqa: E731
     colors = cfg['colors']
     factions = cfg['factions']
     nation_faction = {n: f for f, members in factions.items() for n in members}
@@ -489,49 +500,67 @@ def make_all_graphs(dates, series, cfg, out):
         pre = t['prefix']
         cd = to_country_data(dates, series[key])
         cum = cumulative(cd)
-        plot_individual(cd, colors, t['individual'], t['ylabel'], p(f'{pre}_ic_graph_individual.png'))
-        plot_cumulative(cum, colors, t['cum_title'], t['cum_ylabel'], p(f'{pre}_ic_graph_cumulative.png'))
+        add(key, plot_individual, cd, colors, t['individual'], t['ylabel'],
+            p(f'{pre}_ic_graph_individual.png'))
+        add(key, plot_cumulative, cum, colors, t['cum_title'], t['cum_ylabel'],
+            p(f'{pre}_ic_graph_cumulative.png'))
         fac = faction_sums(cd, factions)
-        plot_axis_vs_allies(fac, t['fac_title'], t['fac_ylabel'], t['fac_stats'],
-                            p(f'{pre}_ic_graph_monthly_factions.png'))
-        cfac = {k: v for k, v in cumulative(fac).items()}
-        plot_axis_vs_allies(cfac, t['cfac_title'], t['cfac_ylabel'], t['cfac_stats'],
-                            p(f'{pre}_ic_graph_cumulative_factions.png'), label_kind='Total',
-                            use_final=True)
+        add(key, plot_axis_vs_allies, fac, t['fac_title'], t['fac_ylabel'], t['fac_stats'],
+            p(f'{pre}_ic_graph_monthly_factions.png'))
+        add(key, plot_axis_vs_allies, cumulative(fac), t['cfac_title'], t['cfac_ylabel'],
+            t['cfac_stats'], p(f'{pre}_ic_graph_cumulative_factions.png'), label_kind='Total',
+            use_final=True)
         if t['minor'] and minors:
-            mcd = {c: cd[c] for c in minors if c in cd}
-            plot_individual(mcd, colors, t['minor'], t['ylabel'],
-                            p(f'{pre}_ic_graph_minor_countries.png'), legend_fs=10, markersize=4)
-            mcum = {c: cum[c] for c in minors if c in cum}
-            plot_cumulative(mcum, colors, t['minor_cum'], t['cum_ylabel'],
-                            p(f'{pre}_ic_graph_minor_countries_cumulative.png'), legend_fs=10)
+            add(key, plot_individual, {c: cd[c] for c in minors if c in cd}, colors, t['minor'],
+                t['ylabel'], p(f'{pre}_ic_graph_minor_countries.png'), legend_fs=10, markersize=4)
+            add(key, plot_cumulative, {c: cum[c] for c in minors if c in cum}, colors,
+                t['minor_cum'], t['cum_ylabel'], p(f'{pre}_ic_graph_minor_countries_cumulative.png'),
+                legend_fs=10)
         if t['sub'] and cfg['sub_factions']:
-            plot_sub_factions(cd, cfg['sub_factions'], t['sub'], t['ylabel'], t['fac_stats'],
-                              p(f'{pre}_ic_graph_detailed_factions.png'))
+            add(key, plot_sub_factions, cd, cfg['sub_factions'], t['sub'], t['ylabel'],
+                t['fac_stats'], p(f'{pre}_ic_graph_detailed_factions.png'))
 
     # army manpower (the original only kept non-zero points)
     mcd = to_country_data(dates, series['manpower'], skip_zero=True)
     mcd = {c: d for c, d in mcd.items() if d['values']}
-    plot_individual(mcd, colors, 'Total Manpower in the Army', 'Army Manpower in the Field',
-                    p('army_manpower_graph_individual.png'), comma=True)
-    plot_axis_vs_allies(faction_sums(mcd, factions), 'Axis vs Allies : Total Manpower in the Army',
-                        'Monthly Total Army Manpower in the Field', 'Average Monthly Manpower:',
-                        p('army_manpower_graph_monthly_factions.png'), comma=True)
+    add('manpower', plot_individual, mcd, colors, 'Total Manpower in the Army',
+        'Army Manpower in the Field', p('army_manpower_graph_individual.png'), comma=True)
+    add('manpower', plot_axis_vs_allies, faction_sums(mcd, factions),
+        'Axis vs Allies : Total Manpower in the Army', 'Monthly Total Army Manpower in the Field',
+        'Average Monthly Manpower:', p('army_manpower_graph_monthly_factions.png'), comma=True)
 
     # division + air equipment cost timelines (faction members only, like the original)
     tracked = [n for n in cfg['nations'] if n in nation_faction]
     div = {n: series['division_cost'][n] for n in tracked}
-    plot_nation_timeline(dates, div, nation_faction, colors,
-                         'HOI4 Military Division Costs Over Time by Nation', 'Total Division Cost',
-                         p('hoi4_nations_timeline.png'))
-    plot_faction_timeline(dates, div, factions,
-                          'HOI4 Military Division Costs: Axis vs Allies Over Time',
-                          'Total Division Cost', p('hoi4_factions_timeline.png'))
+    add('division', plot_nation_timeline, dates, div, nation_faction, colors,
+        'HOI4 Military Division Costs Over Time by Nation', 'Total Division Cost',
+        p('hoi4_nations_timeline.png'))
+    add('division', plot_faction_timeline, dates, div, factions,
+        'HOI4 Military Division Costs: Axis vs Allies Over Time', 'Total Division Cost',
+        p('hoi4_factions_timeline.png'))
     air = {n: series['air_cost'][n] for n in tracked}
-    plot_nation_timeline(dates, air, nation_faction, colors, 'Deployed Air IC by Nation',
-                         'Total Air Wing Equipment Cost', p('hoi4_air_wings_nations_timeline.png'))
-    plot_faction_timeline(dates, air, factions, 'Axis vs Allies : Deployed Air IC',
-                          'Total Air Wing Equipment Cost', p('hoi4_air_wings_factions_timeline.png'))
+    add('air', plot_nation_timeline, dates, air, nation_faction, colors, 'Deployed Air IC by Nation',
+        'Total Air Wing Equipment Cost', p('hoi4_air_wings_nations_timeline.png'))
+    add('air', plot_faction_timeline, dates, air, factions, 'Axis vs Allies : Deployed Air IC',
+        'Total Air Wing Equipment Cost', p('hoi4_air_wings_factions_timeline.png'))
+    return jobs
+
+
+def _draw(job):
+    _, fn, a, kw = job
+    fn(*a, **kw)
+
+
+def draw_all(jobs, workers):
+    t0 = time.time()
+    if workers <= 1 or len(jobs) <= 1:
+        for j in jobs:
+            _draw(j)
+    else:
+        with ProcessPoolExecutor(max_workers=min(workers, len(jobs))) as ex:
+            for f in as_completed([ex.submit(_draw, j) for j in jobs]):
+                f.result()
+    print(f'Drew {len(jobs)} images in {time.time() - t0:.1f}s')
 
 
 # =====================================================================================
@@ -560,10 +589,10 @@ def resolve_checkpoints(dates, spec, n_auto=11):
     return sorted(out)
 
 
-def make_punchcards(dates, series, cfg, out):
+def punchcard_jobs(dates, series, cfg, out):
     idx = resolve_checkpoints(dates, cfg['punchcard_checkpoints'])
     if not idx:
-        return
+        return []
     labels = [dates[i].strftime('%b %Y') for i in idx]
     nation_faction = {n: f for f, members in cfg['factions'].items() for n in members}
     tracked = set(cfg['nations'])
@@ -595,10 +624,14 @@ def make_punchcards(dates, series, cfg, out):
         ('punchcard_3_air_ic.png', 'Air IC in the Field', air),
         ('punchcard_4_army_air_ic.png', 'Army + Air IC in the Field', both),
     ]
-    for fname, title, data in cards:
-        punchcard.render(os.path.join(out, fname), title, labels, at_checkpoints(data), blocs,
-                         names=cfg['names'])
-        print(f"  wrote {fname}")
+    return [('punch', _render_punchcard, (os.path.join(out, fname), title, labels,
+                                          at_checkpoints(data), blocs, cfg['names']), {})
+            for fname, title, data in cards]
+
+
+def _render_punchcard(path, title, labels, values, blocs, names):
+    punchcard.render(path, title, labels, values, blocs, names=names)
+    print(f"  wrote {os.path.basename(path)}")
 
 
 def write_csv(dates, series, cfg, path):
@@ -649,7 +682,16 @@ def main(argv=None):
     ap.add_argument('-j', '--jobs', type=int, default=max(1, (os.cpu_count() or 2) - 1),
                     help='parallel save parsers (default: CPU cores - 1)')
     ap.add_argument('--no-cache', action='store_true', help="don't reuse parsed-save cache")
+    ap.add_argument('--only', help='comma-separated subset of: ' + ','.join(GROUPS) +
+                    ' (default: everything)')
     args = ap.parse_args(argv)
+
+    only = None
+    if args.only:
+        only = {g.strip().lower() for g in args.only.split(',') if g.strip()}
+        unknown = only - set(GROUPS)
+        if unknown:
+            ap.error(f"unknown --only group(s): {', '.join(sorted(unknown))}; choose from {', '.join(GROUPS)}")
 
     folder = args.saves or pick_folder()
     if not folder:
@@ -669,10 +711,19 @@ def main(argv=None):
         return 1
     print(f'Found {len(saves)} saves in {folder}')
     cache_dir = None if args.no_cache else os.path.join(out, '.cache')
-    records, errors = scan_saves(saves, cache_dir, args.jobs)
+    records, errors = scan_saves(saves, cache_dir, args.jobs, cfg['nations'])
     if not records:
         print('Nothing could be read.')
         return 1
+
+    players = sorted({t for r in records for t in r.get('players', [])})
+    missing = [t for t in players if t not in cfg['nations']]
+    if missing:
+        print(f"Note: player countries not in config.json (not graphed): {', '.join(missing)}")
+    seen = {t for r in records for t in r['countries']}
+    absent = [t for t in cfg['nations'] if t not in seen]
+    if absent:
+        print(f"Note: configured nations that never appear in these saves: {', '.join(absent)}")
 
     dates, series, info = build_series(records, cfg)
     print(f'{len(dates)} dates: {dates[0]:%Y.%m.%d} -> {dates[-1]:%Y.%m.%d}')
@@ -684,8 +735,10 @@ def main(argv=None):
               '(token IDs in hoi4_save_parser.py).')
 
     print('Drawing graphs...')
-    make_all_graphs(dates, series, cfg, out)
-    make_punchcards(dates, series, cfg, out)
+    jobs = graph_jobs(dates, series, cfg, out) + punchcard_jobs(dates, series, cfg, out)
+    if only:
+        jobs = [j for j in jobs if j[0] in only]
+    draw_all(jobs, args.jobs)
     write_csv(dates, series, cfg, os.path.join(out, 'hoi4_stats.csv'))
     if errors:
         print(f'{len(errors)} save(s) could not be read:')
@@ -696,4 +749,12 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    import multiprocessing
+    multiprocessing.freeze_support()  # needed for the parallel workers inside the .exe
+    try:
+        rc = main()
+    except SystemExit as e:
+        rc = e.code
+    if FROZEN and not os.environ.get('HOI4GRAPHS_NO_PAUSE'):
+        input('\nPress Enter to close...')  # keep the window open after drag-and-drop
+    sys.exit(rc)

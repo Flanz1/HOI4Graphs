@@ -9,6 +9,12 @@ It reads both HOI4 save formats, **binary** (the default for MP and autosaves) a
 
 ## Use it
 
+**Without Python:** download `HOI4Graphs-windows.zip` from the Releases page (or the latest
+"Build Windows exe" run under Actions), unzip, and drag your save folder onto `HOI4Graphs.exe`.
+Keep `config.json` next to the exe. You can also build the exe yourself with `build_exe.bat`.
+
+**With Python:**
+
 1. Install Python 3.9+ and matplotlib (`pip install matplotlib`). `run_graphs.bat` installs matplotlib for you if it's missing.
 2. Put all the saves of one game in a folder.
 3. Drag that folder onto `run_graphs.bat`, or run:
@@ -18,8 +24,15 @@ python hoi4_graphs.py "C:\path\to\save folder"
 python hoi4_graphs.py "C:\path\to\saves.zip" -o "C:\graphs\my game"
 ```
 
-Graphs land in `<save folder>\graphs\`. Saves are parsed in parallel and cached in
-`graphs\.cache`, so re-running after changing the config is instant.
+Graphs land in `<save folder>\graphs\`. Saves are parsed and graphs drawn in parallel, and
+parsed saves are cached in `graphs\.cache`, so re-running after changing the config only redraws.
+
+Only want some of the output? `--only punch` or `--only mil,nav,manpower` (groups: `mil`, `nav`,
+`civ`, `manpower`, `division`, `air`, `punch`).
+
+Only the nations in `config.json` are read from each save (plus divisions other countries have
+lent to them), which keeps parsing fast. The tool tells you if a player country in the saves
+is missing from the config.
 
 Saves are ordered by the **in-game date** stored inside them (not file names or file times).
 If several saves share the same in-game day, only the latest is used.
