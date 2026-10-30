@@ -32,10 +32,11 @@ jobs:
           New-Item -ItemType Directory -Force HOI4Graphs | Out-Null
           Copy-Item dist\HOI4Graphs.exe, config.json, README.md, LICENSE HOI4Graphs\
           Compress-Archive -Path HOI4Graphs\* -DestinationPath HOI4Graphs-windows.zip -Force
-      - uses: actions/upload-artifact@v4
+      # upload the zip as-is; by default GitHub would zip it again (zip inside a zip)
+      - uses: actions/upload-artifact@v7
         with:
-          name: HOI4Graphs-windows
           path: HOI4Graphs-windows.zip
+          archive: false
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
