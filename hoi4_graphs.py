@@ -232,6 +232,26 @@ def _save(path):
     print(f"  wrote {os.path.basename(path)}")
 
 
+def stats_box_below_legend(legend, text, **kw):
+    """Put the stats box directly under the legend instead of on top of it."""
+    ax = plt.gca()
+    fig = plt.gcf()
+    fig.canvas.draw()
+    bb = legend.get_window_extent().transformed(ax.transAxes.inverted())
+    ax.text(bb.x0, bb.y0 - 0.012, text, transform=ax.transAxes, verticalalignment='top', **kw)
+
+
+def date_ticks(labels, max_labels=26):
+    """Tick every save, but label only every n-th one so the dates don't pile up."""
+    step = max(1, -(-len(labels) // max_labels))
+    shown = [lab if i % step == 0 or i == len(labels) - 1 else '' for i, lab in enumerate(labels)]
+    # don't let the forced last label collide with the previous labelled one
+    rem = (len(labels) - 1) % step
+    if len(labels) > 1 and rem and rem < step * 0.75:
+        shown[len(labels) - 1 - rem] = ''
+    plt.xticks(range(len(labels)), shown, rotation=45, ha='right')
+
+
 def faction_sums(country_data, members_by_faction):
     """Sum country series into faction series (same as calculate_monthly_faction_data)."""
     all_dates = sorted({d for data in country_data.values() for d in data['dates']})
@@ -324,7 +344,7 @@ def plot_axis_vs_allies(fdata, title, ylabel, stats_title, path, *, label_kind='
     plt.ylabel(ylabel, fontsize=12)
     format_x_axis(fdata)
     plt.grid(True, alpha=0.3)
-    plt.legend(loc='upper left', fontsize=12)
+    leg = plt.legend(loc='upper left', fontsize=12)
     ax_v, al_v = fdata['Axis']['values'], fdata['Allies']['values']
     if ax_v and al_v:
         if use_final:
@@ -334,8 +354,7 @@ def plot_axis_vs_allies(fdata, title, ylabel, stats_title, path, *, label_kind='
         text = f'{stats_title}\nAxis: {fmt(a, comma)}\nAllies: {fmt(b, comma)}'
         text += (f'\nAxis leads by: {fmt(a - b, comma)}' if a > b
                  else f'\nAllies lead by: {fmt(b - a, comma)}')
-        plt.text(0.02, 0.98, text, transform=plt.gca().transAxes, verticalalignment='top',
-                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        stats_box_below_legend(leg, text, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     _save(path)
 
 
@@ -357,7 +376,7 @@ def plot_sub_factions(country_data, sub_factions, title, ylabel, stats_title, pa
     plt.ylabel(ylabel, fontsize=12)
     format_x_axis(data)
     plt.grid(True, alpha=0.3)
-    plt.legend(loc='upper left', fontsize=10)
+    leg = plt.legend(loc='upper left', fontsize=10)
     text = stats_title + '\n'
     best, best_name = 0, ''
     for s in sub_factions:
@@ -369,8 +388,8 @@ def plot_sub_factions(country_data, sub_factions, title, ylabel, stats_title, pa
                 best, best_name = avg, s['name']
     if best_name:
         text += f'\nLeader: {best_name}'
-    plt.text(0.02, 0.98, text, transform=plt.gca().transAxes, verticalalignment='top',
-             bbox=dict(boxstyle='round', facecolor='white', alpha=0.9), fontsize=9)
+    stats_box_below_legend(leg, text.rstrip('\n') if not best_name else text,
+                           bbox=dict(boxstyle='round', facecolor='white', alpha=0.9), fontsize=9)
     _save(path)
 
 
@@ -389,7 +408,7 @@ def plot_nation_timeline(dates, per_nation, nation_faction, colors, title, ylabe
     plt.title(title, fontsize=18, fontweight='bold')
     plt.xlabel('Game Date', fontsize=14)
     plt.ylabel(ylabel, fontsize=14)
-    plt.xticks(range(len(labels)), labels, rotation=45, ha='right')
+    date_ticks(labels)
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
     plt.grid(True, alpha=0.3, linestyle=':', linewidth=0.5)
     _save(path)
@@ -407,7 +426,7 @@ def plot_faction_timeline(dates, per_nation, factions, title, ylabel, path):
     plt.title(title, fontsize=18, fontweight='bold')
     plt.xlabel('Game Date', fontsize=14)
     plt.ylabel(ylabel, fontsize=14)
-    plt.xticks(range(len(labels)), labels, rotation=45, ha='right')
+    date_ticks(labels)
     plt.legend(fontsize=12)
     plt.grid(True, alpha=0.3)
     _save(path)
