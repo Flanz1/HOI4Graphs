@@ -82,7 +82,10 @@ Unit costs come from the `cost` of military production lines, first value seen a
 Equipment that was never on a production line uses the defaults in the config (1.1 for division
 equipment, 23 for planes), the same as the original scripts.
 
-`hoi4_stats.csv` has every value per nation per date if you want your own charts.
+`hoi4_stats.csv` has every value per nation per save date, for Excel or your own charts.
+The `monthly_*_ic` columns are the production *rate* at that save (IC per month, i.e. daily
+line output x 30); the `cumulative_*_ic` columns are the running totals used by the cumulative
+graphs and punch cards (each save adds its monthly value once).
 
 ## Notes
 

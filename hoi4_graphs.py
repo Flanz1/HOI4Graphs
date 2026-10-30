@@ -661,10 +661,16 @@ def write_csv(dates, series, cfg, path):
     with open(path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
         w.writerow(['date', 'nation', 'monthly_mil_ic', 'monthly_civ_ic', 'monthly_nav_ic',
-                    'army_manpower', 'division_cost', 'air_wing_cost'])
+                    'army_manpower', 'division_cost', 'air_wing_cost',
+                    'cumulative_mil_ic', 'cumulative_civ_ic', 'cumulative_nav_ic'])
+        # running totals, summed per save exactly like the cumulative graphs and punch cards
+        run = {n: [0.0, 0.0, 0.0] for n in cfg['nations']}
         for i, d in enumerate(dates):
             for n in cfg['nations']:
-                w.writerow([d.strftime('%Y.%m.%d'), n] + [round(series[c][n][i], 3) for c in cols])
+                for k, c in enumerate(('mil', 'civ', 'nav')):
+                    run[n][k] += series[c][n][i]
+                w.writerow([d.strftime('%Y.%m.%d'), n] + [round(series[c][n][i], 3) for c in cols]
+                           + [round(v, 3) for v in run[n]])
     print(f"  wrote {os.path.basename(path)}")
 
 
