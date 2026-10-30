@@ -484,16 +484,37 @@ IC_TEXT = {
 
 GROUPS = ('mil', 'nav', 'civ', 'manpower', 'division', 'air', 'punch')
 
+# each group of images goes into its own sub-folder of the output folder
+FOLDERS = {
+    'mil': 'Military IC',
+    'civ': 'Civilian IC',
+    'nav': 'Naval IC',
+    'manpower': 'Manpower in the Field',
+    'division': 'Land IC in the Field',
+    'air': 'Air IC in the Field',
+    'punch': 'Punch Cards',
+}
+
+
+class OutFile(str):
+    """An output file name; placed into its group's folder when the job is queued."""
+
+
+def _place(out, group, args):
+    folder = os.path.join(out, FOLDERS.get(group, ''))
+    os.makedirs(folder, exist_ok=True)
+    return tuple(os.path.join(folder, a) if isinstance(a, OutFile) else a for a in args)
+
 
 def graph_jobs(dates, series, cfg, out):
     """Every image as a (group, function, args, kwargs) job, so they can be drawn in parallel."""
     jobs = []
-    add = lambda group, fn, *a, **kw: jobs.append((group, fn, a, kw))  # noqa: E731
+    add = lambda group, fn, *a, **kw: jobs.append((group, fn, _place(out, group, a), kw))  # noqa: E731
     colors = cfg['colors']
     factions = cfg['factions']
     nation_faction = {n: f for f, members in factions.items() for n in members}
     minors = cfg['minor_countries']
-    p = lambda name: os.path.join(out, name)  # noqa: E731
+    p = OutFile
 
     for key in ('mil', 'nav', 'civ'):
         t = IC_TEXT[key]
@@ -624,8 +645,9 @@ def punchcard_jobs(dates, series, cfg, out):
         ('punchcard_3_air_ic.png', 'Air IC in the Field', air),
         ('punchcard_4_army_air_ic.png', 'Army + Air IC in the Field', both),
     ]
-    return [('punch', _render_punchcard, (os.path.join(out, fname), title, labels,
-                                          at_checkpoints(data), blocs, cfg['names']), {})
+    return [('punch', _render_punchcard, _place(out, 'punch', (OutFile(fname), title, labels,
+                                                             at_checkpoints(data), blocs,
+                                                             cfg['names'])), {})
             for fname, title, data in cards]
 
 
@@ -738,6 +760,7 @@ def main(argv=None):
     jobs = graph_jobs(dates, series, cfg, out) + punchcard_jobs(dates, series, cfg, out)
     if only:
         jobs = [j for j in jobs if j[0] in only]
+    print('  into: ' + ', '.join(f'{FOLDERS[g]}\\' for g in GROUPS if any(j[0] == g for j in jobs)))
     draw_all(jobs, args.jobs)
     write_csv(dates, series, cfg, os.path.join(out, 'hoi4_stats.csv'))
     if errors:

@@ -24,8 +24,22 @@ python hoi4_graphs.py "C:\path\to\save folder"
 python hoi4_graphs.py "C:\path\to\saves.zip" -o "C:\graphs\my game"
 ```
 
-Graphs land in `<save folder>\graphs\`. Saves are parsed and graphs drawn in parallel, and
-parsed saves are cached in `graphs\.cache`, so re-running after changing the config only redraws.
+Graphs land in `<save folder>\graphs\`, sorted into one folder per category:
+
+```
+graphs\
+  Military IC\              military_ic_graph_*.png
+  Civilian IC\              civilian_ic_graph_*.png
+  Naval IC\                 navy_ic_graph_*.png
+  Manpower in the Field\    army_manpower_graph_*.png
+  Land IC in the Field\     hoi4_nations_timeline.png, hoi4_factions_timeline.png
+  Air IC in the Field\      hoi4_air_wings_*_timeline.png
+  Punch Cards\              punchcard_1..4_*.png
+  hoi4_stats.csv
+```
+
+Saves are parsed and graphs drawn in parallel, and parsed saves are cached in `graphs\.cache`,
+so re-running after changing the config only redraws.
 
 Only want some of the output? `--only punch` or `--only mil,nav,manpower` (groups: `mil`, `nav`,
 `civ`, `manpower`, `division`, `air`, `punch`).
